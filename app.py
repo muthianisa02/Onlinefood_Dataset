@@ -1,94 +1,82 @@
 # app.py
-import flask
-from flask import Flask, request, jsonify, render_template
-import joblib
+import streamlit as st
 import pandas as pd
-import numpy as np
-
-app = Flask(__name__)
+import joblib
 
 # Memuat model dan preprocessor yang telah disimpan
-# Pastikan file-file ini ada di direktori yang sama dengan app.py saat deployment
 try:
-    model = joblib.load('best_svc_model.pkl')
+    model = joblib.load('best_svc_model_improved.pkl')
     preprocessor = joblib.load('preprocessor.pkl')
-    # LabelEncoder juga perlu dimuat atau dibuat ulang untuk mapping
-    # Asumsi label_encoder dari pelatihan: 0 untuk 'Negative', 1 untuk 'Positive'
-    # Jika Anda menyimpan label_encoder, muat di sini. Jika tidak, buat manual.
-    # Untuk kasus ini, kita tahu kelasnya biner, jadi bisa manual.
+    # Definisi label untuk hasil prediksi
     feedback_labels = {0: 'Negative', 1: 'Positive'}
-    print("Model dan preprocessor berhasil dimuat.")
-except Exception as e:
-    print(f"Error saat memuat model atau preprocessor: {e}")
-    model = None
-    preprocessor = None
-    feedback_labels = {0: 'Negative', 1: 'Positive'} # Default jika gagal muat
+    st.title("Aplikasi Prediksi Feedback Pelanggan")
+    st.write("Aplikasi ini memprediksi apakah feedback pelanggan akan 'Positive' atau 'Negative' berdasarkan data demografi dan perilaku.")
 
-@app.route('/')
-def home():
-    """Halaman utama untuk antarmuka sederhana."""
-    return render_template('index.html')
+except FileNotFoundError:
+    st.error("Error: File model atau preprocessor tidak ditemukan. Pastikan file 'best_svc_model.pkl' dan 'preprocessor.pkl' ada di direktori yang sama.")
+    st.stop()
 
-@app.route('/predict', methods=['POST'])
-def predict():
-    """Endpoint untuk melakukan prediksi."""
-    if model is None or preprocessor is None:
-        return jsonify({'error': 'Model atau preprocessor belum dimuat. Periksa log server.'}), 500
+# --- Membuat Antarmuka Pengguna (UI) ---
+
+st.sidebar.header("Input Data Pelanggan")
+
+# Fitur Numerik
+age = st.sidebar.number_input("Usia", min_value=18, max_value=100, value=25)
+family_size = st.sidebar.number_input("Ukuran Keluarga", min_value=1, max_value=10, value=3)
+latitude = st.sidebar.number_input("Latitude", value=12.97, format="%.4f")
+longitude = st.sidebar.number_input("Longitude", value=77.59, format="%.4f")
+pin_code = st.sidebar.number_input("Kode Pos", min_value=100000, max_value=999999, value=560001)
+
+# Fitur Kategorikal
+gender_options = ['Female', 'Male']
+gender = st.sidebar.selectbox("Jenis Kelamin", options=gender_options)
+
+marital_status_options = ['Single', 'Married', 'Prefer not to say']
+marital_status = st.sidebar.selectbox("Status Pernikahan", options=marital_status_options)
+
+occupation_options = ['Student', 'Employee', 'Self Employeed', 'House wife']
+occupation = st.sidebar.selectbox("Pekerjaan", options=occupation_options)
+
+monthly_income_options = ['No Income', 'Below Rs.10000', '10001 to 25000', '25001 to 50000', 'More than 50000']
+monthly_income = st.sidebar.selectbox("Pendapatan Bulanan", options=monthly_income_options)
+
+educational_qual_options = ['Post Graduate', 'Graduate', 'Ph.D', 'School', 'Uneducated']
+educational_qual = st.sidebar.selectbox("Kualifikasi Pendidikan", options=educational_qual_options)
+
+output_options = ['Yes', 'No']
+output = st.sidebar.selectbox("Output (Apakah Pernah Memesan)", options=output_options)
+
+# Membuat tombol prediksi
+if st.sidebar.button("Prediksi"):
+    # Mengumpulkan semua input ke dalam DataFrame
+    input_data = pd.DataFrame([{
+        'Age': age,
+        'Gender': gender,
+        'Marital Status': marital_status,
+        'Occupation': occupation,
+        'Monthly Income': monthly_income,
+        'Educational Qualifications': educational_qual,
+        'Family size': family_size,
+        'latitude': latitude,
+        'longitude': longitude,
+        'Pin code': pin_code,
+        'Output': output
+    }])
 
     try:
-        data = request.json
+        # Menerapkan preprocessor pada data input
+        processed_input = preprocessor.transform(input_data)
         
-        # Contoh data yang diharapkan:
-        # {
-        #     "Age": 25,
-        #     "Gender": "Female",
-        #     "Marital Status": "Single",
-        #     "Occupation": "Student",
-        #     "Monthly Income": "No Income",
-        #     "Educational Qualifications": "Graduate",
-        #     "Family size": 3,
-        #     "latitude": 12.977,
-        #     "longitude": 77.5773,
-        #     "Pin code": 560009,
-        #     "Output": "Yes"
-        # }
+        # Melakukan prediksi
+        prediction = model.predict(processed_input)
+        prediction_label = feedback_labels[prediction[0]]
 
-        # Buat DataFrame dari input JSON
-        input_df = pd.DataFrame([data])
-
-        # Pastikan kolom sesuai urutan dan nama yang diharapkan oleh preprocessor
-        # (Ini penting karena OneHotEncoder akan membuat kolom berdasarkan urutan saat fit)
-        # Ambil kolom asli dari X_train yang digunakan saat fit preprocessor
-        # Untuk ini, kita perlu mengetahui kolom asli dari X
-        # Jika Anda tidak menyimpan X_train, Anda harus memastikan input_df memiliki kolom yang sama
-        # dengan urutan yang sama seperti df.drop('Feedback', axis=1)
-        
-        # Contoh kolom yang diharapkan (sesuai dengan X dari stage 2)
-        expected_columns = [
-            'Age', 'Gender', 'Marital Status', 'Occupation', 'Monthly Income',
-            'Educational Qualifications', 'Family size', 'latitude', 'longitude',
-            'Pin code', 'Output'
-        ]
-        
-        # Pastikan input_df memiliki semua kolom yang diharapkan, isi NaN jika tidak ada
-        # dan urutkan sesuai expected_columns
-        input_df = input_df.reindex(columns=expected_columns, fill_value=np.nan)
-
-        # Lakukan preprocessing pada data input
-        # Gunakan preprocessor.transform, BUKAN fit_transform
-        processed_input = preprocessor.transform(input_df)
-
-        # Lakukan prediksi
-        prediction_encoded = model.predict(processed_input)[0]
-        prediction_label = feedback_labels.get(prediction_encoded, "Unknown")
-
-        return jsonify({'prediction': prediction_label})
-
+        # Menampilkan hasil prediksi
+        st.subheader("Hasil Prediksi:")
+        if prediction_label == 'Positive':
+            st.success(f"Feedback yang diprediksi adalah: **{prediction_label}** 🎉")
+        else:
+            st.warning(f"Feedback yang diprediksi adalah: **{prediction_label}** 😞")
+            
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-if __name__ == '__main__':
-    # Untuk pengembangan lokal, gunakan:
-    # app.run(debug=True, host='0.0.0.0', port=5000)
-    # Untuk deployment di Heroku, Gunicorn akan menjalankan app
-    app.run(debug=False) # Pastikan debug=False saat deployment
+        st.error(f"Terjadi kesalahan saat memprediksi: {e}")
